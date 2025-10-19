@@ -15,7 +15,13 @@ from PIL import Image
 
 import sys
 from pathlib import Path
-sys.path.append(str(Path(__file__).parent.parent / "OM_Scraper"))
+# Add the OM_Scraper directory to Python path
+# Use absolute path resolution to avoid issues with Streamlit's working directory
+current_file = Path(__file__).resolve()
+frontend_dir = current_file.parent
+project_root = frontend_dir.parent
+om_scraper_path = project_root / "OM_Scraper"
+sys.path.insert(0, str(om_scraper_path))
 
 from om_extractor import (
     DEFAULT_MAX_PAGES,

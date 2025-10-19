@@ -13,6 +13,10 @@ import pgeocode
 import streamlit as st
 from PIL import Image
 
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).parent.parent / "OM_Scraper"))
+
 from om_extractor import (
     DEFAULT_MAX_PAGES,
     call_azure_extraction,
@@ -20,11 +24,11 @@ from om_extractor import (
     pdf_to_images,
 )
 
-REPO_ROOT = Path(__file__).resolve().parent
-DEFAULT_PDF_FOLDER = (REPO_ROOT / ".." / "OMs").resolve()
-DEFAULT_CREXI_PATH = REPO_ROOT / "crexi_merged_ny" / "merged_properties.csv"
-DEFAULT_REALTOR_SALE_PATH = REPO_ROOT / "realtor_merged" / "properties_New_York_20251017_225557.csv"
-DEFAULT_REALTOR_RENT_PATH = REPO_ROOT / "realtor_merged" / "realtor_rent.csv"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_PDF_FOLDER = (REPO_ROOT / "OMs").resolve()
+DEFAULT_CREXI_PATH = REPO_ROOT / "backend" / "data" / "crexi_merged_ny" / "merged_properties.csv"
+DEFAULT_REALTOR_SALE_PATH = REPO_ROOT / "backend" / "data" / "realtor_merged" / "properties_New_York_20251017_225557.csv"
+DEFAULT_REALTOR_RENT_PATH = REPO_ROOT / "backend" / "data" / "realtor_merged" / "realtor_rent.csv"
 
 EARTH_RADIUS_MILES = 3958.7613
 VACANCY_DEFAULT = 0.06

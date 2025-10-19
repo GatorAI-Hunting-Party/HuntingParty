@@ -1,9 +1,0 @@
-requests
-pdf2image
-Pillow
-streamlit==1.50.0
-pandas
-python-dotenv
-
-numpy
-pgeocode

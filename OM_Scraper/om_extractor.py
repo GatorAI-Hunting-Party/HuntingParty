@@ -4,11 +4,16 @@ import base64
 import io
 import json
 import os
+from pathlib import Path
 from typing import Any, Dict, List, Sequence
 
 import requests
 from pdf2image import convert_from_path
 from PIL import Image
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv(Path(__file__).parent / ".env")
 
 DEFAULT_DPI = 150
 DEFAULT_MAX_PAGES = 12

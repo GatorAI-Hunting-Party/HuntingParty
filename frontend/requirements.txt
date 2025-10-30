@@ -3,3 +3,7 @@ pandas
 numpy
 pgeocode
 Pillow
+altair
+requests
+pdf2image
+python-dotenv

@@ -940,7 +940,7 @@ def compute_opportunity_zone_share(df: pd.DataFrame) -> Optional[float]:
         return None
     return float(series.mean())
 
-
+@st.fragment
 def build_heatmap(data: pd.DataFrame, central_location: tuple[float, float], zoom: int = 6):
     data_normalized = data[["latitude", "longitude", "asking_price"]].dropna(subset=["latitude", "longitude", "asking_price"])
 
@@ -957,30 +957,31 @@ def build_heatmap(data: pd.DataFrame, central_location: tuple[float, float], zoo
     if den == 0:
         data_normalized["asking_price_norm"] = 1.0
     else:
-        data_normalized["asking_price_norm"] = ((data_normalized["asking_price"] - q1_price) / den).clip(lower=0.1, upper=1.0)
-        
-
-    # If you want a density/heat rather than points: (alt approach)
-    fig = go.Figure(go.Densitymapbox(
-        lat=data_normalized['latitude'],
-        lon=data_normalized['longitude'],
-        z=data_normalized['asking_price_norm'],
-        radius=15,
-        customdata=data_normalized['asking_price'],
-        hovertemplate='<span style="font-size:16px; font-weight:bold;">$%{customdata:,.2f}</span><extra></extra>',
-        colorscale="YlOrRd",
-        showscale=False
-    ))
-
-    fig.update_layout(
-        mapbox_style="carto-darkmatter",
-        mapbox_center={"lat": central_location[0], "lon": central_location[1]},
-        mapbox_zoom=zoom,
-        margin=dict(l=0, r=0, t=0, b=0),
-        showlegend=False,
+        data_normalized["asking_price_norm"] = ((data_normalized["asking_price"] - q1_price) / den)
+    
+    fig = go.Figure(
+        go.Densitymap(
+            lat = data_normalized['latitude'],
+            lon = data_normalized['longitude'],
+            z = data_normalized['asking_price_norm'],
+            zmin=0.1,
+            zmax=1,
+            radius = 15,
+            customdata = data_normalized['asking_price'],
+            hovertemplate = '<span style="font-size:16px; font-weight:bold;">$%{customdata:,.2f}</span><extra></extra>',
+            colorscale = "YlOrRd",
+            showscale = False,
+        )
     )
 
-
+    fig.update_layout(
+        margin = dict(l=0, r=0, t=0, b=0),
+        showlegend = False,
+        map_style = "carto-darkmatter",
+        map_center_lat=central_location[0],
+        map_center_lon=central_location[1],
+        map_zoom=5
+    )
 
     return fig
 

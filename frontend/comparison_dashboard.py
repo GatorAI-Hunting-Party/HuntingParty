@@ -21,6 +21,9 @@ REPO_ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = REPO_ROOT.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+SCRAPER_ROOT = PROJECT_ROOT / "OM_Scraper"
+if SCRAPER_ROOT.exists() and str(SCRAPER_ROOT) not in sys.path:
+    sys.path.insert(0, str(SCRAPER_ROOT))
 
 from app.lib.supabase_io import (
     fetch_crexi_comps,

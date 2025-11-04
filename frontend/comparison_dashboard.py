@@ -1,9 +1,10 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import math
 import re
 import tempfile
+from functools import partial
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -12,29 +13,19 @@ import pandas as pd
 import pgeocode
 import streamlit as st
 from PIL import Image
-
-import sys
-from pathlib import Path
-# Add the OM_Scraper directory to Python path
-# Use absolute path resolution to avoid issues with Streamlit's working directory
-current_file = Path(__file__).resolve()
-frontend_dir = current_file.parent
-project_root = frontend_dir.parent
-om_scraper_path = project_root / "OM_Scraper"
-sys.path.insert(0, str(om_scraper_path))
+import altair as alt
 
 from om_extractor import (
-    DEFAULT_MAX_PAGES,
     call_azure_extraction,
     images_to_base64,
     pdf_to_images,
 )
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_PDF_FOLDER = (REPO_ROOT / "OMs").resolve()
-DEFAULT_CREXI_PATH = REPO_ROOT / "backend" / "data" / "crexi_merged_ny" / "merged_properties.csv"
-DEFAULT_REALTOR_SALE_PATH = REPO_ROOT / "backend" / "data" / "realtor_merged" / "properties_New_York_20251017_225557.csv"
-DEFAULT_REALTOR_RENT_PATH = REPO_ROOT / "backend" / "data" / "realtor_merged" / "realtor_rent.csv"
+REPO_ROOT = Path(__file__).resolve().parent
+DEFAULT_PDF_FOLDER = (REPO_ROOT / ".." / "OMs").resolve()
+DEFAULT_CREXI_PATH = REPO_ROOT / "crexi_merged_ny" / "merged_properties.csv"
+DEFAULT_REALTOR_SALE_PATH = REPO_ROOT / "realtor_merged" / "properties_New_York_20251017_225557.csv"
+DEFAULT_REALTOR_RENT_PATH = REPO_ROOT / "realtor_merged" / "realtor_rent.csv"
 
 EARTH_RADIUS_MILES = 3958.7613
 VACANCY_DEFAULT = 0.06
@@ -49,6 +40,17 @@ BEDROOM_MAP = [
     ("3 Bed", "3_bed", 3),
     ("4 Bed", "4_bed", 4),
 ]
+
+TAB_LABELS = [
+    "Overview",
+    "Rent vs Market",
+    "Financials",
+    "Spatial Pricing",
+    "Comps",
+    "Raw JSON",
+    "PDF Preview",
+]
+ACTIVE_TAB_KEY = "comparison_active_tab"
 
 
 def to_float(value: Any) -> Optional[float]:
@@ -144,6 +146,10 @@ def pct_diff(value: Optional[float], reference: Optional[float]) -> Optional[flo
     if reference == 0:
         return None
     return (value - reference) / reference
+
+
+def remember_tab(tab_name: str) -> None:
+    st.session_state[ACTIVE_TAB_KEY] = tab_name
 
 
 FORMATTERS = {
@@ -753,15 +759,16 @@ def build_financial_comparison(
     crexi_df: pd.DataFrame,
     realtor_df: pd.DataFrame,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    # Realtor data is currently unused but kept in the signature for backward compatibility.
     metric_defs = [
-        {"label": "Asking Price", "om_key": "asking_price", "crexi_col": "asking_price", "realtor_col": "list_price", "fmt": "money0"},
-        {"label": "Price/Unit", "om_key": "price_per_unit", "crexi_col": "price_per_unit", "realtor_col": None, "fmt": "money0"},
-        {"label": "Price/SqFt", "om_key": "price_per_sqft", "crexi_col": "price_per_sqft", "realtor_col": "price_per_sqft", "fmt": "money0"},
-        {"label": "Price/Acre", "om_key": "price_per_acre", "crexi_col": "price_per_acre", "realtor_col": "price_per_acre", "fmt": "money0"},
-        {"label": "NOI", "om_key": "noi", "crexi_col": "noi", "realtor_col": None, "fmt": "money0"},
-        {"label": "Cap Rate", "om_key": "cap_rate", "crexi_col": "cap_rate", "realtor_col": None, "fmt": "percent2"},
-        {"label": "Expense Ratio", "om_key": "expense_ratio", "crexi_col": None, "realtor_col": None, "fmt": "percent1"},
-        {"label": "Expense Cost", "om_key": "expense_cost", "crexi_col": None, "realtor_col": None, "fmt": "money0"},
+        {"label": "Asking Price", "om_key": "asking_price", "crexi_col": "asking_price", "fmt": "money0"},
+        {"label": "Price/Unit", "om_key": "price_per_unit", "crexi_col": "price_per_unit", "fmt": "money0"},
+        {"label": "Price/SqFt", "om_key": "price_per_sqft", "crexi_col": "price_per_sqft", "fmt": "money0"},
+        {"label": "Price/Acre", "om_key": "price_per_acre", "crexi_col": "price_per_acre", "fmt": "money0"},
+        {"label": "NOI", "om_key": "noi", "crexi_col": "noi", "fmt": "money0"},
+        {"label": "Cap Rate", "om_key": "cap_rate", "crexi_col": "cap_rate", "fmt": "percent2"},
+        {"label": "Expense Ratio", "om_key": "expense_ratio", "crexi_col": None, "fmt": "percent1"},
+        {"label": "Expense Cost", "om_key": "expense_cost", "crexi_col": None, "fmt": "money0"},
     ]
 
     rows = []
@@ -770,22 +777,18 @@ def build_financial_comparison(
 
         crexi_avg = None
         crexi_count = None
-        if crexi_df is not None and not crexi_df.empty and metric["crexi_col"] and metric["crexi_col"] in crexi_df.columns:
+        if (
+            crexi_df is not None
+            and not crexi_df.empty
+            and metric["crexi_col"]
+            and metric["crexi_col"] in crexi_df.columns
+        ):
             series = crexi_df[metric["crexi_col"]].dropna()
             if not series.empty:
                 crexi_avg = float(series.mean())
                 crexi_count = int(series.count())
 
-        realtor_avg = None
-        realtor_count = None
-        if realtor_df is not None and not realtor_df.empty and metric["realtor_col"] and metric["realtor_col"] in realtor_df.columns:
-            series = realtor_df[metric["realtor_col"]].dropna()
-            if not series.empty:
-                realtor_avg = float(series.mean())
-                realtor_count = int(series.count())
-
         delta_crexi = pct_diff(om_value, crexi_avg) if crexi_avg is not None else None
-        delta_realtor = pct_diff(om_value, realtor_avg) if realtor_avg is not None else None
 
         rows.append(
             {
@@ -793,10 +796,7 @@ def build_financial_comparison(
                 "OM": om_value,
                 "Crexi Avg": crexi_avg,
                 "Crexi Count": crexi_count,
-                "Realtor Avg": realtor_avg,
-                "Realtor Count": realtor_count,
                 "OM vs Crexi %": delta_crexi,
-                "OM vs Realtor %": delta_realtor,
                 "format_key": metric["fmt"],
             }
         )
@@ -813,10 +813,7 @@ def build_financial_comparison(
                 "OM": formatter(row["OM"]),
                 "Crexi Avg": formatter(row["Crexi Avg"]) if row["Crexi Avg"] is not None else "-",
                 "Crexi Count": format_number(row["Crexi Count"], 0) if row["Crexi Count"] is not None else "-",
-                "Realtor Avg": formatter(row["Realtor Avg"]) if row["Realtor Avg"] is not None else "-",
-                "Realtor Count": format_number(row["Realtor Count"], 0) if row["Realtor Count"] is not None else "-",
                 "OM vs Crexi %": format_percent(row["OM vs Crexi %"], 1),
-                "OM vs Realtor %": format_percent(row["OM vs Realtor %"], 1),
             }
         )
 
@@ -960,6 +957,256 @@ def prepare_display_table(
         prepared = prepared.head(limit)
     return prepared
 
+def run_weighted_price_model(
+    profile: Dict[str, Any],
+    crexi_df: Optional[pd.DataFrame],
+    origin: Optional[Tuple[float, float]],
+    bandwidth_miles: float,
+    max_distance: float,
+    selected_feature_keys: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    if origin is None:
+        return {"error": "Property coordinates unavailable; the spatial model needs latitude/longitude."}
+
+    if crexi_df is None or crexi_df.empty:
+        return {"error": "No CREXi comps available to fit the spatial model."}
+
+    df = crexi_df.copy()
+    if "distance_miles" not in df.columns:
+        df = add_distance_column(df, origin, "latitude", "longitude")
+
+    source_total = len(df)
+    distance_mask = df["distance_miles"].notna()
+    coords_total = int(distance_mask.sum())
+    missing_coords = source_total - coords_total
+
+    df = df[distance_mask]
+    if df.empty:
+        return {
+            "error": "CREXi comps are missing coordinates; cannot compute distances.",
+            "source_comps": source_total,
+            "comps_with_coordinates": coords_total,
+            "missing_coordinates": missing_coords,
+        }
+
+    df = df[df["distance_miles"] <= max_distance]
+    if df.empty:
+        return {
+            "error": "No comps within the selected distance threshold.",
+            "source_comps": source_total,
+            "comps_with_coordinates": coords_total,
+            "missing_coordinates": missing_coords,
+            "within_radius": 0,
+        }
+
+    df_candidates = df.copy()
+    within_radius = len(df_candidates)
+
+    if "asking_price" not in df.columns:
+        return {
+            "error": "CREXi data is missing asking prices.",
+            "source_comps": source_total,
+            "comps_with_coordinates": coords_total,
+            "missing_coordinates": missing_coords,
+            "within_radius": within_radius,
+        }
+    df_model = df[df["asking_price"].notna()].copy()
+    if df_model.empty:
+        return {
+            "error": "No comps with asking price data inside the distance threshold.",
+            "source_comps": source_total,
+            "comps_with_coordinates": coords_total,
+            "missing_coordinates": missing_coords,
+            "within_radius": within_radius,
+        }
+
+    feature_defs = {
+        "units": {
+            "label": "Units",
+            "om_value": profile.get("total_units"),
+            "transform": np.log1p,
+            "nonnegative": True,
+            "min_non_null": 5,
+            "format_key": "number0",
+        },
+        "sqft": {
+            "label": "Rentable SqFt",
+            "om_value": profile.get("rentable_square_footage"),
+            "transform": np.log1p,
+            "nonnegative": True,
+            "min_non_null": 5,
+            "format_key": "number0",
+        },
+        "lot_size_acres": {
+            "label": "Lot Size (acres)",
+            "om_value": profile.get("lot_size_acres"),
+            "transform": np.log1p,
+            "nonnegative": True,
+            "min_non_null": 5,
+            "format_key": "number2",
+        },
+        "cap_rate": {
+            "label": "Cap Rate",
+            "om_value": profile.get("cap_rate"),
+            "transform": lambda arr: arr,
+            "nonnegative": False,
+            "min_non_null": 5,
+            "format_key": "percent2",
+        },
+    }
+
+    if selected_feature_keys is None:
+        selected_feature_keys = [
+            key for key, meta in feature_defs.items() if meta["om_value"] is not None
+        ]
+
+    usable_features: List[Dict[str, Any]] = []
+    for key in selected_feature_keys:
+        meta = feature_defs.get(key)
+        if not meta:
+            continue
+        om_value = meta["om_value"]
+        if om_value is None or (isinstance(om_value, float) and math.isnan(om_value)):
+            continue
+        if key not in df_model.columns:
+            continue
+
+        series = pd.to_numeric(df_model[key], errors="coerce")
+        if meta.get("nonnegative", False):
+            series = series.where(series >= 0)
+
+        df_model[key] = series
+        non_null = series.notna().sum()
+        if non_null < meta.get("min_non_null", 5):
+            continue
+
+        usable_features.append(
+            {
+                "key": key,
+                "label": meta["label"],
+                "transform": meta["transform"],
+                "format_key": meta["format_key"],
+                "om_value": float(om_value),
+            }
+        )
+
+    if not usable_features:
+        return {
+            "error": "Selected features lack sufficient data overlap between the OM and nearby CREXi comps.",
+        }
+
+    feature_keys = [meta["key"] for meta in usable_features]
+    model_mask = df_model[feature_keys + ["asking_price"]].notna().all(axis=1)
+    if model_mask.sum() < len(usable_features) + 2:
+        return {"error": "Too few comps with complete data to fit the spatial model."}
+
+    df_model = df_model.loc[model_mask].copy()
+
+    distances = df_model["distance_miles"].to_numpy(dtype=float)
+    bandwidth = max(bandwidth_miles, 0.25)
+    weights = np.exp(-((distances / bandwidth) ** 2))
+    if not np.any(weights > 1e-6):
+        return {"error": "Distance weighting eliminated all comps. Try increasing the bandwidth."}
+
+    mask = weights > 1e-6
+    df_model = df_model.loc[mask].copy()
+    weights = weights[mask]
+    if len(df_model) < len(usable_features) + 2:
+        return {"error": "After weighting, too few comps remain to fit the model. Increase the bandwidth or radius."}
+
+    model_indices = df_model.index.to_numpy()
+
+    y_log = np.log1p(df_model["asking_price"].to_numpy(dtype=float))
+
+    design_columns = [np.ones(len(df_model))]
+    om_vector = [1.0]
+    for meta in usable_features:
+        column_data = df_model[meta["key"]].to_numpy(dtype=float)
+        transform = meta["transform"]
+        transformed = transform(column_data)
+        design_columns.append(transformed)
+
+        om_transformed = transform(np.array([meta["om_value"]], dtype=float))
+        om_vector.append(float(om_transformed[0]))
+
+    X = np.column_stack(design_columns)
+    sqrt_w = np.sqrt(weights)
+    X_weighted = X * sqrt_w[:, None]
+    y_weighted = y_log * sqrt_w
+
+    try:
+        beta, _, _, _ = np.linalg.lstsq(X_weighted, y_weighted, rcond=None)
+    except np.linalg.LinAlgError:
+        return {"error": "Weighted regression failed to converge. Try loosening the distance/bandwidth settings."}
+
+    prediction_log = float(np.dot(om_vector, beta))
+    prediction_value = float(np.expm1(prediction_log))
+
+    fitted_logs = X @ beta
+    fitted_prices = np.expm1(fitted_logs)
+    residuals = df_model["asking_price"].to_numpy(dtype=float) - fitted_prices
+    weighted_rmse = float(np.sqrt(np.average(residuals ** 2, weights=weights)))
+    normalized_weights = weights / weights.sum()
+
+    weight_map = {
+        idx: float(weight_pct)
+        for idx, weight_pct in zip(model_indices, normalized_weights * 100.0)
+    }
+    price_map = {idx: float(price) for idx, price in zip(model_indices, fitted_prices)}
+
+    chart_df = df_candidates.copy()
+    chart_df["weight_pct"] = chart_df.index.map(lambda idx: weight_map.get(idx, 0.0))
+    chart_df["model_price"] = chart_df.index.map(price_map.get)
+    chart_df["in_model"] = chart_df.index.map(lambda idx: idx in weight_map and weight_map[idx] > 0)
+    chart_df["distance_miles"] = chart_df.get("distance_miles")
+    chart_df["asking_price"] = pd.to_numeric(chart_df.get("asking_price"), errors="coerce")
+    chart_df["model_price"] = pd.to_numeric(chart_df["model_price"], errors="coerce")
+    chart_df["residual"] = chart_df["model_price"] - chart_df["asking_price"]
+
+    display_df = chart_df.copy()
+    display_df["Weight %"] = display_df.index.map(lambda idx: weight_map.get(idx, 0.0))
+    display_df["Model Price"] = display_df.index.map(price_map.get)
+    display_df["In Model"] = display_df["Weight %"].apply(lambda v: "Yes" if v > 0 else "No")
+    display_df["Distance (mi)"] = display_df["distance_miles"]
+    display_df["Property"] = display_df.get("property_name", pd.Series(["-"] * len(display_df)))
+    display_df["Address"] = display_df.get("address", pd.Series(["-"] * len(display_df)))
+    if "asking_price" in display_df.columns:
+        display_df["Asking Price"] = display_df["asking_price"]
+    for meta in usable_features:
+        display_df[meta["label"]] = pd.to_numeric(display_df.get(meta["key"]), errors="coerce")
+    display_df = display_df.sort_values("Weight %", ascending=False)
+
+    coeff_rows = [{"Feature": "Intercept", "Coefficient (log$)": beta[0]}]
+    for idx, meta in enumerate(usable_features, start=1):
+        coeff_rows.append(
+            {
+                "Feature": meta["label"],
+                "Coefficient (log$)": beta[idx],
+            }
+        )
+    coeff_df = pd.DataFrame(coeff_rows)
+
+    om_feature_snapshot = {meta["label"]: meta["om_value"] for meta in usable_features}
+
+    return {
+        "prediction": prediction_value,
+        "prediction_log": prediction_log,
+        "weighted_rmse": weighted_rmse,
+        "effective_comps": len(df_model),
+        "candidate_comps": len(df_candidates),
+        "source_comps": source_total,
+        "comps_with_coordinates": coords_total,
+        "missing_coordinates": missing_coords,
+        "within_radius": within_radius,
+        "features_used": [meta["label"] for meta in usable_features],
+        "om_features": om_feature_snapshot,
+        "feature_metadata": usable_features,
+        "coefficients": coeff_df,
+        "comp_display": display_df,
+        "chart_data": chart_df,
+    }
+
+
 def main() -> None:
     st.set_page_config(page_title="OM Comparison Dashboard", layout="wide")
     st.title("OM Comparison Dashboard")
@@ -1006,8 +1253,6 @@ def main() -> None:
             format_func=lambda p: "Use uploaded file" if p is None else p.name,
         )
         uploaded_pdf = st.file_uploader("Or upload OM PDF", type=["pdf"])
-        max_pages = st.slider("Pages to send to model", min_value=1, max_value=20, value=min(DEFAULT_MAX_PAGES, 12))
-
         st.header("Comparison Filters")
         apply_filters = st.checkbox(
             "Apply filters",
@@ -1049,7 +1294,7 @@ def main() -> None:
             if pdf_path:
                 try:
                     with st.spinner("Extracting data from OM..."):
-                        images = pdf_to_images(pdf_path, max_pages=max_pages)
+                        images = pdf_to_images(pdf_path)
                         base64_images = images_to_base64(images)
                         extraction = call_azure_extraction(base64_images)
                     st.session_state["om_extraction"] = {
@@ -1088,6 +1333,10 @@ def main() -> None:
     }
 
     origin = resolve_property_coordinates(profile, [crexi_df, realtor_sales_df, realtor_rent_df])
+
+    crexi_distance_only = crexi_df.copy() if crexi_df is not None else pd.DataFrame()
+    if not crexi_distance_only.empty:
+        crexi_distance_only = add_distance_column(crexi_distance_only, origin, "latitude", "longitude")
 
     if apply_filters:
         crexi_filtered = apply_crexi_filters(crexi_df, profile, filters, origin)
@@ -1148,15 +1397,12 @@ def main() -> None:
 
     oz_share = compute_opportunity_zone_share(crexi_filtered)
 
-    overview_tab, rent_tab, financial_tab, comps_tab, raw_tab, pdf_tab = st.tabs(
-        [
-            "Overview",
-            "Rent vs Market",
-            "Financials",
-            "Comps",
-            "Raw JSON",
-            "PDF Preview",
-        ]
+    if ACTIVE_TAB_KEY not in st.session_state:
+        st.session_state[ACTIVE_TAB_KEY] = TAB_LABELS[0]
+
+    overview_tab, rent_tab, financial_tab, spatial_tab, comps_tab, raw_tab, pdf_tab = st.tabs(
+        TAB_LABELS,
+        default=st.session_state.get(ACTIVE_TAB_KEY, TAB_LABELS[0]),
     )
 
     with overview_tab:
@@ -1205,7 +1451,7 @@ def main() -> None:
             completion_tokens = tokens.get("completion_tokens")
             total_tokens = tokens.get("total_tokens")
             st.caption(
-                f"Tokens — prompt: {prompt_tokens}, completion: {completion_tokens}, total: {total_tokens}"
+                f"Tokens - prompt: {prompt_tokens}, completion: {completion_tokens}, total: {total_tokens}"
             )
 
         json_payload = json.dumps(om_data, indent=2)
@@ -1255,6 +1501,310 @@ def main() -> None:
             st.info("No physical comparison available with current filters.")
         else:
             st.dataframe(physical_display, use_container_width=True, hide_index=True)
+
+    with spatial_tab:
+        st.subheader("Spatial Pricing Model")
+        if crexi_distance_only.empty:
+            st.info("CREXi comps are required to run the spatial model.")
+        else:
+            remember_spatial_tab = partial(remember_tab, "Spatial Pricing")
+            controls = st.columns(2)
+            default_radius = max(5, min(int(max_distance), 50))
+            spatial_radius = controls[0].slider(
+                "Model radius (miles)",
+                min_value=5,
+                max_value=100,
+                value=default_radius,
+                step=5,
+                key="spatial_radius_miles",
+                on_change=remember_spatial_tab,
+            )
+            default_bandwidth = max(1.0, min(float(max_distance), 10.0))
+            spatial_bandwidth = controls[1].slider(
+                "Distance bandwidth (miles)",
+                min_value=0.5,
+                max_value=50.0,
+                value=default_bandwidth,
+                step=0.5,
+                key="spatial_bandwidth_miles",
+                on_change=remember_spatial_tab,
+            )
+            if spatial_bandwidth > spatial_radius:
+                spatial_bandwidth = float(spatial_radius)
+
+            feature_candidates = [
+                {"key": "units", "label": "Units", "om_value": profile.get("total_units")},
+                {"key": "sqft", "label": "Rentable SqFt", "om_value": profile.get("rentable_square_footage")},
+                {"key": "lot_size_acres", "label": "Lot Size (acres)", "om_value": profile.get("lot_size_acres")},
+                {"key": "cap_rate", "label": "Cap Rate", "om_value": profile.get("cap_rate")},
+            ]
+            available_features = [item for item in feature_candidates if item["om_value"] is not None]
+            if not available_features:
+                st.warning("No OM features available to fit the spatial model.")
+            else:
+                default_labels = [item["label"] for item in available_features]
+                selected_labels = st.multiselect(
+                    "Model features",
+                    options=[item["label"] for item in available_features],
+                    default=default_labels,
+                    help="Choose which OM metrics the spatial regression should match.",
+                    key="spatial_feature_labels",
+                    on_change=remember_spatial_tab,
+                )
+                selected_keys = [
+                    item["key"] for item in available_features if item["label"] in selected_labels
+                ]
+
+                if not selected_keys:
+                    st.info("Select at least one feature to run the spatial model.")
+                else:
+                    model_result = run_weighted_price_model(
+                        profile,
+                        crexi_distance_only,
+                        origin,
+                        bandwidth_miles=float(spatial_bandwidth),
+                        max_distance=float(spatial_radius),
+                        selected_feature_keys=selected_keys,
+                    )
+
+                    if "error" in model_result:
+                        st.warning(model_result["error"])
+                        detail_parts: List[str] = []
+                        source_total = model_result.get("source_comps")
+                        coords_total = model_result.get("comps_with_coordinates")
+                        missing_coords = model_result.get("missing_coordinates")
+                        within_radius = model_result.get("within_radius")
+                        if source_total is not None:
+                            detail_parts.append(f"CREXi comps: {int(source_total):,}")
+                        if coords_total is not None:
+                            detail_parts.append(f"With coordinates: {int(coords_total):,}")
+                        if missing_coords:
+                            detail_parts.append(f"Missing coordinates: {int(missing_coords):,}")
+                        if within_radius is not None:
+                            detail_parts.append(f"Within radius: {int(within_radius):,}")
+                        if detail_parts:
+                            st.caption(" | ".join(detail_parts))
+                    else:
+                        predicted_price = model_result["prediction"]
+                        om_price = profile.get("asking_price")
+                        delta_value = None
+                        if om_price is not None and not (
+                            isinstance(om_price, float) and math.isnan(om_price)
+                        ):
+                            delta_value = predicted_price - om_price
+                        metric_delta = format_money(delta_value, 0) if delta_value is not None else None
+                        st.metric(
+                            "Model Asking Price",
+                            format_money(predicted_price, 0),
+                            delta=metric_delta,
+                        )
+
+                        weighted_rmse = model_result.get("weighted_rmse")
+                        rmse_display = (
+                            format_money(weighted_rmse, 0) if weighted_rmse is not None else "-"
+                        )
+                        candidate_total = model_result.get("candidate_comps")
+                        source_total = model_result.get("source_comps")
+                        coords_total = model_result.get("comps_with_coordinates")
+                        missing_coords = model_result.get("missing_coordinates")
+                        caption_main: str
+                        if candidate_total is not None:
+                            caption_main = (
+                                f"Comps used in regression: {model_result['effective_comps']:,} of "
+                                f"{candidate_total:,} within radius"
+                            )
+                        else:
+                            caption_main = f"Comps used in regression: {model_result['effective_comps']:,}"
+                        coord_notes: List[str] = []
+                        if coords_total is not None:
+                            coord_notes.append(f"{int(coords_total):,} with coordinates")
+                        if missing_coords:
+                            coord_notes.append(f"{int(missing_coords):,} missing coordinates")
+                        if source_total is not None:
+                            coord_notes.append(f"{int(source_total):,} total CREXi comps")
+                        if coord_notes:
+                            caption_main += " (" + ", ".join(coord_notes) + ")"
+                        caption_text = f"{caption_main} - Weighted RMSE: {rmse_display}"
+                        st.caption(caption_text)
+                        if model_result.get("features_used"):
+                            st.caption(
+                                "Features in model: " + ", ".join(model_result["features_used"])
+                            )
+
+                        chart_df = model_result.get("chart_data")
+                        if isinstance(chart_df, pd.DataFrame) and not chart_df.empty:
+                            chart_numeric = chart_df.copy()
+                            chart_numeric = chart_numeric[
+                                chart_numeric["model_price"].notna() & chart_numeric["asking_price"].notna()
+                            ].copy()
+                            if not chart_numeric.empty:
+                                chart_numeric["weight_pct"] = chart_numeric["weight_pct"].fillna(0.0)
+                                chart_numeric["distance_miles"] = chart_numeric["distance_miles"].fillna(0.0)
+                                chart_numeric["residual"] = chart_numeric["residual"].fillna(0.0)
+                                if "property_name" not in chart_numeric.columns:
+                                    chart_numeric["property_name"] = ""
+                                chart_numeric["property_name"] = chart_numeric["property_name"].astype(str)
+                                if "address" in chart_numeric.columns:
+                                    chart_numeric["address"] = chart_numeric["address"].astype(str)
+                                else:
+                                    chart_numeric["address"] = ""
+
+                                scatter = (
+                                    alt.Chart(chart_numeric)
+                                    .mark_circle(opacity=0.7)
+                                    .encode(
+                                        x=alt.X("asking_price:Q", title="Actual Asking Price"),
+                                        y=alt.Y("model_price:Q", title="Model Price"),
+                                        size=alt.Size(
+                                            "weight_pct:Q",
+                                            title="Weight %",
+                                            scale=alt.Scale(range=[20, 400]),
+                                        ),
+                                        color=alt.Color(
+                                            "distance_miles:Q",
+                                            title="Distance (mi)",
+                                            scale=alt.Scale(scheme="viridis"),
+                                        ),
+                                        tooltip=[
+                                            alt.Tooltip("property_name:N", title="Property"),
+                                            alt.Tooltip("address:N", title="Address"),
+                                            alt.Tooltip("asking_price:Q", title="Actual Price", format=",.0f"),
+                                            alt.Tooltip("model_price:Q", title="Model Price", format=",.0f"),
+                                            alt.Tooltip("weight_pct:Q", title="Weight %", format=".1f"),
+                                            alt.Tooltip("distance_miles:Q", title="Distance (mi)", format=".2f"),
+                                            alt.Tooltip("residual:Q", title="Residual", format=",.0f"),
+                                        ],
+                                    )
+                                )
+                                value_min = float(
+                                    min(chart_numeric["asking_price"].min(), chart_numeric["model_price"].min())
+                                )
+                                value_max = float(
+                                    max(chart_numeric["asking_price"].max(), chart_numeric["model_price"].max())
+                                )
+                                identity = (
+                                    alt.Chart(
+                                        pd.DataFrame(
+                                            {"price": [value_min, value_max]}
+                                        )
+                                    )
+                                    .mark_line(color="#d62728", strokeDash=[4, 4])
+                                    .encode(x="price:Q", y="price:Q")
+                                )
+                                st.markdown("**Actual vs model price**")
+                                st.altair_chart(
+                                    (scatter + identity).properties(height=360).interactive(),
+                                    use_container_width=True,
+                                )
+
+                                residual_chart = (
+                                    alt.Chart(chart_numeric)
+                                    .mark_bar()
+                                    .encode(
+                                        y=alt.Y(
+                                            "property_name:N",
+                                            title="Property",
+                                            sort="-x",
+                                        ),
+                                        x=alt.X(
+                                            "residual:Q",
+                                            title="Residual (Model - Actual)",
+                                            axis=alt.Axis(format=",.0f"),
+                                        ),
+                                        color=alt.condition(
+                                            alt.datum.residual >= 0,
+                                            alt.value("#1b9e77"),
+                                            alt.value("#d95f02"),
+                                        ),
+                                        tooltip=[
+                                            alt.Tooltip("property_name:N", title="Property"),
+                                            alt.Tooltip("residual:Q", title="Residual", format=",.0f"),
+                                            alt.Tooltip("weight_pct:Q", title="Weight %", format=".1f"),
+                                        ],
+                                    )
+                                )
+                                st.markdown("**Residuals (positive = model higher than actual)**")
+                                st.altair_chart(
+                                    residual_chart.properties(height=360),
+                                    use_container_width=True,
+                                )
+
+                        feature_metadata = model_result.get("feature_metadata", [])
+                        feature_rows = []
+                        for meta in feature_metadata:
+                            formatter = FORMATTERS.get(meta["format_key"], lambda v: format_number(v, 2))
+                            formatted_value = formatter(meta["om_value"])
+                            feature_rows.append(
+                                {
+                                    "Feature": meta["label"],
+                                    "OM Value": formatted_value,
+                                }
+                            )
+                        if feature_rows:
+                            st.markdown("**Model inputs**")
+                            st.dataframe(
+                                pd.DataFrame(feature_rows),
+                                use_container_width=True,
+                                hide_index=True,
+                            )
+
+                        comp_display = model_result["comp_display"].copy()
+                        if not comp_display.empty:
+                            if "Distance (mi)" in comp_display.columns:
+                                comp_display["Distance (mi)"] = comp_display["Distance (mi)"].apply(
+                                    lambda v: format_number(v, 1) if pd.notna(v) else "-"
+                                )
+                            if "Weight %" in comp_display.columns:
+                                comp_display["Weight %"] = comp_display["Weight %"].apply(
+                                    lambda v: f"{v:.1f}%"
+                                )
+                            asking_series = comp_display.get("Asking Price")
+                            if asking_series is not None:
+                                comp_display["Asking Price"] = asking_series.apply(format_money)
+                            model_series = comp_display.get("Model Price")
+                            if model_series is not None:
+                                comp_display["Model Price"] = model_series.apply(
+                                    lambda v: format_money(v) if pd.notna(v) else "-"
+                                )
+                            for meta in feature_metadata:
+                                column = meta["label"]
+                                if column in comp_display.columns:
+                                    formatter = FORMATTERS.get(
+                                        meta["format_key"], lambda v: format_number(v, 2)
+                                    )
+                                    comp_display[column] = comp_display[column].apply(
+                                        lambda v: formatter(v) if pd.notna(v) else "-"
+                                    )
+                            display_columns = [
+                                col
+                                for col in [
+                                    "Property",
+                                    "Address",
+                                    "Distance (mi)",
+                                    "Weight %",
+                                    "In Model",
+                                    "Asking Price",
+                                    "Model Price",
+                                ]
+                                if col in comp_display.columns
+                            ]
+                            for meta in feature_metadata:
+                                if meta["label"] in comp_display.columns:
+                                    display_columns.append(meta["label"])
+                            comp_display = comp_display[display_columns]
+                            st.markdown("**Comps within radius**")
+                            st.caption(
+                                "`In Model` = Yes denotes comps used in the weighted regression. Weight 0% means the comp was outside the modeled feature set but still falls within the distance filter."
+                            )
+                            st.dataframe(comp_display, use_container_width=True, hide_index=True)
+
+                        coeff_df = model_result["coefficients"].copy()
+                        if not coeff_df.empty:
+                            coeff_df["Coefficient (log$)"] = coeff_df["Coefficient (log$)"].apply(
+                                lambda v: f"{v:.4f}"
+                            )
+                            st.markdown("**Model coefficients (log-dollar space)**")
+                            st.dataframe(coeff_df, use_container_width=True, hide_index=True)
 
     with comps_tab:
         st.subheader("CREXi Comp Stats")
@@ -1356,9 +1906,20 @@ def main() -> None:
         if not images:
             st.info("PDF preview unavailable.")
         else:
-            page = st.slider("Page", min_value=1, max_value=len(images), value=1)
+            total_pages = len(images)
+            if total_pages <= 1:
+                page = 1
+            else:
+                page = st.slider(
+                    "Page",
+                    min_value=1,
+                    max_value=total_pages,
+                    value=1,
+                    key="pdf_preview_page",
+                    on_change=partial(remember_tab, "PDF Preview"),
+                )
             st.image(images[page - 1], use_column_width=True)
-            st.caption(f"Showing page {page} of {len(images)}")
+            st.caption(f"Showing page {page} of {total_pages}")
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Sequence
 
 import requests
 from pdf2image import convert_from_path
+from pdf2image.exceptions import PDFInfoNotInstalledError, PDFPageCountError, PDFSyntaxError
 from PIL import Image
 from dotenv import load_dotenv
 
@@ -150,7 +151,40 @@ Extract the following information from the property documents:
 - Be flexible with field names - they vary significantly across OMs"""
 
 def pdf_to_images(pdf_path: str, *, max_pages: int = DEFAULT_MAX_PAGES, dpi: int = DEFAULT_DPI) -> List[Image.Image]:
-    return convert_from_path(pdf_path, dpi=dpi, first_page=1, last_page=max_pages)
+    try:
+        return convert_from_path(pdf_path, dpi=dpi, first_page=1, last_page=max_pages)
+    except (PDFInfoNotInstalledError, PDFPageCountError, PDFSyntaxError) as exc:
+        images = _pdf_to_images_with_pymupdf(pdf_path, max_pages=max_pages, dpi=dpi)
+        if images:
+            return images
+        raise RuntimeError(
+            "Unable to convert PDF to images. Install poppler utilities or add PyMuPDF to the environment."
+        ) from exc
+
+
+def _pdf_to_images_with_pymupdf(pdf_path: str, *, max_pages: int, dpi: int) -> List[Image.Image]:
+    try:
+        import fitz  # PyMuPDF
+    except ImportError:
+        return []
+
+    doc = fitz.open(pdf_path)
+    try:
+        images: List[Image.Image] = []
+        zoom = dpi / 72.0
+        matrix = fitz.Matrix(zoom, zoom)
+        total_pages = min(len(doc), max_pages)
+        for page_number in range(total_pages):
+            page = doc.load_page(page_number)
+            pix = page.get_pixmap(matrix=matrix, alpha=False)
+            mode = "RGBA" if pix.alpha else "RGB"
+            image = Image.frombytes(mode, [pix.width, pix.height], pix.samples)
+            if mode == "RGBA":
+                image = image.convert("RGB")
+            images.append(image)
+        return images
+    finally:
+        doc.close()
 
 
 def images_to_base64(images: Sequence[Image.Image], *, format: str = "JPEG", quality: int = 85) -> List[str]:
@@ -237,7 +271,6 @@ __all__ = [
     "call_azure_extraction",
     "extract_data_from_pdf",
 ]
-
 
 
 

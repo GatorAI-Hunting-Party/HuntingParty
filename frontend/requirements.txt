@@ -8,3 +8,4 @@ requests
 pdf2image
 python-dotenv
 supabase>=2.3.0
+pymupdf>=1.24.0

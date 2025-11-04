@@ -2,3 +2,4 @@ requests
 pdf2image
 Pillow
 python-dotenv
+pymupdf>=1.24.0

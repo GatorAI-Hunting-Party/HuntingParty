@@ -15,6 +15,12 @@ import streamlit as st
 from PIL import Image
 import altair as alt
 
+from app.lib.supabase_io import (
+    fetch_crexi_comps,
+    fetch_market_medians,
+    fetch_realtor_props,
+    fetch_realtor_rent,
+)
 from om_extractor import (
     call_azure_extraction,
     images_to_base64,
@@ -23,9 +29,6 @@ from om_extractor import (
 
 REPO_ROOT = Path(__file__).resolve().parent
 DEFAULT_PDF_FOLDER = (REPO_ROOT / ".." / "OMs").resolve()
-DEFAULT_CREXI_PATH = REPO_ROOT / "crexi_merged_ny" / "merged_properties.csv"
-DEFAULT_REALTOR_SALE_PATH = REPO_ROOT / "realtor_merged" / "properties_New_York_20251017_225557.csv"
-DEFAULT_REALTOR_RENT_PATH = REPO_ROOT / "realtor_merged" / "realtor_rent.csv"
 
 EARTH_RADIUS_MILES = 3958.7613
 VACANCY_DEFAULT = 0.06
@@ -394,31 +397,48 @@ def resolve_property_coordinates(profile: Dict[str, Any], datasets: List[Optiona
 
 
 @st.cache_data(show_spinner=False)
-def load_crexi_dataset(path: str) -> pd.DataFrame:
-    df = pd.read_csv(path)
-    rename_map = {
-        "Property Link": "property_link",
-        "Property Name": "property_name",
-        "Property Status": "property_status",
-        "Type": "property_type",
-        "Address": "address",
-        "City": "city",
-        "State": "state",
-        "Zip": "zip_code",
-        "SqFt": "sqft",
-        "Lot Size": "lot_size_acres",
-        "Units": "units",
-        "Price/Unit": "price_per_unit",
-        "NOI": "noi",
-        "Cap Rate": "cap_rate",
-        "Asking Price": "asking_price",
-        "Price/SqFt": "price_per_sqft",
-        "Price/Acre": "price_per_acre",
-        "Opportunity Zone": "opportunity_zone",
-        "Longitude": "longitude",
-        "Latitude": "latitude",
+def load_crexi_dataset(
+    city: Optional[str],
+    state: Optional[str],
+    limit: int = 1000,
+) -> pd.DataFrame:
+    city_filter = city.title().strip() if isinstance(city, str) and city.strip() else None
+    state_filter = state.upper().strip() if isinstance(state, str) and state.strip() else None
+    df = fetch_crexi_comps(city=city_filter, state=state_filter, limit=limit)
+    if df.empty:
+        return df
+
+    df = df.copy()
+    rename_variants = {
+        "property_link": ["Property Link", "property_link"],
+        "property_name": ["Property Name", "property_name"],
+        "property_status": ["Property Status", "property_status"],
+        "property_type": ["Type", "property_type"],
+        "address": ["Address", "address"],
+        "city": ["City", "city"],
+        "state": ["State", "state"],
+        "zip_code": ["Zip", "zip_code"],
+        "sqft": ["SqFt", "sqft"],
+        "lot_size_acres": ["Lot Size", "lot_size_acres"],
+        "units": ["Units", "units"],
+        "price_per_unit": ["Price/Unit", "price_per_unit"],
+        "noi": ["NOI", "noi"],
+        "cap_rate": ["Cap Rate", "cap_rate"],
+        "asking_price": ["Asking Price", "asking_price"],
+        "price_per_sqft": ["Price/SqFt", "price_per_sqft"],
+        "price_per_acre": ["Price/Acre", "price_per_acre"],
+        "opportunity_zone": ["Opportunity Zone", "opportunity_zone"],
+        "longitude": ["Longitude", "longitude"],
+        "latitude": ["Latitude", "latitude"],
     }
-    df = df.rename(columns=rename_map)
+    rename_map = {}
+    for target, variants in rename_variants.items():
+        for variant in variants:
+            if variant in df.columns and variant != target:
+                rename_map[variant] = target
+                break
+    if rename_map:
+        df = df.rename(columns=rename_map)
 
     numeric_cols = [
         "sqft",
@@ -434,30 +454,103 @@ def load_crexi_dataset(path: str) -> pd.DataFrame:
         "latitude",
     ]
     for col in numeric_cols:
-        df[col] = pd.to_numeric(df.get(col), errors="coerce")
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    df["cap_rate"] = df["cap_rate"].apply(lambda x: x / 100.0 if pd.notna(x) and x > 1 else x)
-    mask = df["price_per_unit"].isna() & df["asking_price"].notna() & df["units"].notna() & (df["units"] != 0)
-    df.loc[mask, "price_per_unit"] = df.loc[mask, "asking_price"] / df.loc[mask, "units"]
+    if "cap_rate" in df.columns:
+        df["cap_rate"] = df["cap_rate"].apply(lambda x: x / 100.0 if pd.notna(x) and x > 1 else x)
 
-    mask = df["price_per_sqft"].isna() & df["asking_price"].notna() & df["sqft"].notna() & (df["sqft"] != 0)
-    df.loc[mask, "price_per_sqft"] = df.loc[mask, "asking_price"] / df.loc[mask, "sqft"]
+    if {"price_per_unit", "asking_price", "units"}.issubset(df.columns):
+        mask = (
+            df["price_per_unit"].isna()
+            & df["asking_price"].notna()
+            & df["units"].notna()
+            & (df["units"] != 0)
+        )
+        df.loc[mask, "price_per_unit"] = df.loc[mask, "asking_price"] / df.loc[mask, "units"]
 
-    mask = df["price_per_acre"].isna() & df["asking_price"].notna() & df["lot_size_acres"].notna() & (df["lot_size_acres"] != 0)
-    df.loc[mask, "price_per_acre"] = df.loc[mask, "asking_price"] / df.loc[mask, "lot_size_acres"]
+    if {"price_per_sqft", "asking_price", "sqft"}.issubset(df.columns):
+        mask = (
+            df["price_per_sqft"].isna()
+            & df["asking_price"].notna()
+            & df["sqft"].notna()
+            & (df["sqft"] != 0)
+        )
+        df.loc[mask, "price_per_sqft"] = df.loc[mask, "asking_price"] / df.loc[mask, "sqft"]
 
-    df["opportunity_zone_bool"] = df["opportunity_zone"].apply(parse_bool)
+    if {"price_per_acre", "asking_price", "lot_size_acres"}.issubset(df.columns):
+        mask = (
+            df["price_per_acre"].isna()
+            & df["asking_price"].notna()
+            & df["lot_size_acres"].notna()
+            & (df["lot_size_acres"] != 0)
+        )
+        df.loc[mask, "price_per_acre"] = df.loc[mask, "asking_price"] / df.loc[mask, "lot_size_acres"]
 
-    df["city"] = df["city"].astype(str).str.strip()
-    df["city_upper"] = df["city"].str.upper()
-    df["state"] = df["state"].astype(str).str.upper().str.strip()
-    df["zip_code"] = df["zip_code"].astype(str).str.strip()
+    if "opportunity_zone" in df.columns:
+        df["opportunity_zone_bool"] = df["opportunity_zone"].apply(parse_bool)
+    else:
+        df["opportunity_zone_bool"] = np.nan
+
+    if "city" in df.columns:
+        df["city"] = df["city"].astype(str).str.strip()
+        df["city_upper"] = df["city"].str.upper()
+    else:
+        df["city_upper"] = None
+
+    if "state" in df.columns:
+        df["state"] = df["state"].astype(str).str.upper().str.strip()
+
+    if "zip_code" in df.columns:
+        df["zip_code"] = df["zip_code"].astype(str).str.strip()
+
+    for col in ["latitude", "longitude"]:
+        if col not in df.columns:
+            df[col] = np.nan
 
     return df
 
 @st.cache_data(show_spinner=False)
-def load_realtor_sale_dataset(path: str) -> pd.DataFrame:
-    df = pd.read_csv(path)
+def load_realtor_sale_dataset(
+    city: Optional[str],
+    state: Optional[str],
+    limit: int = 5000,
+) -> pd.DataFrame:
+    city_filter = city.lower().strip() if isinstance(city, str) and city.strip() else None
+    state_filter = state.lower().strip() if isinstance(state, str) and state.strip() else None
+    df = fetch_realtor_props(city=city_filter, state=state_filter, limit=limit)
+    if df.empty:
+        return df
+
+    df = df.copy()
+    rename_variants = {
+        "property_url": ["property_url"],
+        "formatted_address": ["formatted_address", "address"],
+        "city": ["city"],
+        "state": ["state"],
+        "zip_code": ["zip_code", "postal_code"],
+        "status": ["status"],
+        "beds": ["beds"],
+        "full_baths": ["full_baths"],
+        "sqft": ["sqft"],
+        "year_built": ["year_built"],
+        "list_price": ["list_price", "price"],
+        "lot_sqft": ["lot_sqft"],
+        "price_per_sqft": ["price_per_sqft"],
+        "latitude": ["latitude"],
+        "longitude": ["longitude"],
+        "stories": ["stories"],
+        "hoa_fee": ["hoa_fee"],
+    }
+    rename_map = {}
+    for target, variants in rename_variants.items():
+        for variant in variants:
+            if variant in df.columns and variant != target:
+                rename_map[variant] = target
+                break
+    if rename_map:
+        df = df.rename(columns=rename_map)
+
     cols = [
         "property_url",
         "formatted_address",
@@ -480,10 +573,7 @@ def load_realtor_sale_dataset(path: str) -> pd.DataFrame:
     available_cols = [c for c in cols if c in df.columns]
     df = df[available_cols].copy()
 
-    rename_map = {
-        "formatted_address": "address",
-    }
-    df = df.rename(columns=rename_map)
+    df = df.rename(columns={"formatted_address": "address"})
 
     numeric_cols = [
         "beds",
@@ -507,11 +597,14 @@ def load_realtor_sale_dataset(path: str) -> pd.DataFrame:
     else:
         df["lot_acres"] = np.nan
 
-    df["price_per_acre"] = np.where(
-        (df.get("list_price").notna()) & (df["lot_acres"].notna()) & (df["lot_acres"] != 0),
-        df["list_price"] / df["lot_acres"],
-        np.nan,
-    )
+    if "list_price" in df.columns:
+        df["price_per_acre"] = np.where(
+            (df["list_price"].notna()) & (df["lot_acres"].notna()) & (df["lot_acres"] != 0),
+            df["list_price"] / df["lot_acres"],
+            np.nan,
+        )
+    else:
+        df["price_per_acre"] = np.nan
 
     df["city"] = df.get("city", pd.Series(dtype=str)).astype(str).str.strip()
     df["city_upper"] = df["city"].str.upper()
@@ -520,12 +613,48 @@ def load_realtor_sale_dataset(path: str) -> pd.DataFrame:
     if "zip_code" in df.columns:
         df["zip_code"] = df["zip_code"].astype(str).str.strip()
 
+    for col in ["latitude", "longitude"]:
+        if col not in df.columns:
+            df[col] = np.nan
+
     return df
 
 
 @st.cache_data(show_spinner=False)
-def load_realtor_rent_dataset(path: str) -> pd.DataFrame:
-    df = pd.read_csv(path)
+def load_realtor_rent_dataset(
+    city: Optional[str],
+    state: Optional[str],
+    limit: int = 5000,
+) -> pd.DataFrame:
+    city_filter = city.lower().strip() if isinstance(city, str) and city.strip() else None
+    state_filter = state.lower().strip() if isinstance(state, str) and state.strip() else None
+    df = fetch_realtor_rent(city=city_filter, state=state_filter, limit=limit)
+    if df.empty:
+        return df
+
+    df = df.copy()
+    rename_variants = {
+        "property_url": ["property_url"],
+        "formatted_address": ["formatted_address", "address"],
+        "city": ["city"],
+        "state": ["state"],
+        "zip_code": ["zip_code", "postal_code"],
+        "status": ["status"],
+        "beds": ["beds"],
+        "sqft": ["sqft"],
+        "list_price": ["list_price", "asking_rent"],
+        "latitude": ["latitude"],
+        "longitude": ["longitude"],
+    }
+    rename_map = {}
+    for target, variants in rename_variants.items():
+        for variant in variants:
+            if variant in df.columns and variant != target:
+                rename_map[variant] = target
+                break
+    if rename_map:
+        df = df.rename(columns=rename_map)
+
     cols = [
         "property_url",
         "formatted_address",
@@ -555,6 +684,10 @@ def load_realtor_rent_dataset(path: str) -> pd.DataFrame:
         df["state"] = df["state"].astype(str).str.upper().str.strip()
     if "zip_code" in df.columns:
         df["zip_code"] = df["zip_code"].astype(str).str.strip()
+
+    for col in ["latitude", "longitude"]:
+        if col not in df.columns:
+            df[col] = np.nan
 
     return df
 
@@ -1218,29 +1351,17 @@ def main() -> None:
 
     with st.sidebar:
         st.header("Data Sources")
-        crexi_path = DEFAULT_CREXI_PATH
-        realtor_sale_path = DEFAULT_REALTOR_SALE_PATH
-        realtor_rent_path = DEFAULT_REALTOR_RENT_PATH
-
-        # st.caption(f"CREXi source: {crexi_path}")
-        # st.caption(f"Realtor sales source: {realtor_sale_path}")
-        # st.caption(f"Realtor rent source: {realtor_rent_path}")
-
-        def _load_dataset(path: Path, loader, label: str) -> Optional[pd.DataFrame]:
-            if not path.exists():
-                st.error(f"{label} file not found: {path}")
-                return None
-            try:
-                df = loader(str(path))
-                st.caption(f"{label} rows: {len(df):,}")
-                return df
-            except Exception as exc:
-                st.error(f"{label} load failed: {exc}")
-                return None
-
-        crexi_df = _load_dataset(crexi_path, load_crexi_dataset, "CREXi")
-        realtor_sales_df = _load_dataset(realtor_sale_path, load_realtor_sale_dataset, "Realtor sales")
-        realtor_rent_df = _load_dataset(realtor_rent_path, load_realtor_rent_dataset, "Realtor rent")
+        st.caption(
+            "Supabase tables: crexi_merged_ny_clean, realtor_properties_ny_clean, "
+            "realtor_rent_clean, market_medians_all."
+        )
+        dataset_counts = st.session_state.get("dataset_counts")
+        if dataset_counts:
+            st.caption(f"CREXi rows: {dataset_counts.get('crexi', 0):,}")
+            st.caption(f"Realtor sales rows: {dataset_counts.get('realtor_sales', 0):,}")
+            st.caption(f"Realtor rent rows: {dataset_counts.get('realtor_rent', 0):,}")
+        else:
+            st.caption("Run an extraction to load market datasets from Supabase.")
 
         st.header("OM PDF")
         pdf_files: List[Path] = []
@@ -1322,6 +1443,39 @@ def main() -> None:
         return
 
     profile = build_property_profile(om_data)
+
+    city_value = profile.get("city")
+    state_value = profile.get("state")
+    market_medians_df = pd.DataFrame()
+    try:
+        with st.spinner("Loading market datasets from Supabase..."):
+            crexi_df = load_crexi_dataset(city_value, state_value)
+            realtor_sales_df = load_realtor_sale_dataset(city_value, state_value)
+            realtor_rent_df = load_realtor_rent_dataset(city_value, state_value)
+            if city_value and state_value:
+                market_medians_df = fetch_market_medians(
+                    geography=f"{city_value}, {state_value}",
+                    metrics=[
+                        "price_per_sf_usd",
+                        "price_per_unit_usd",
+                        "cap_rate_pct",
+                        "noi_usd",
+                        "list_price_usd",
+                    ],
+                )
+    except Exception as exc:
+        st.error(
+            f"Failed to load market datasets from Supabase. Check credentials and connectivity. Details: {exc}"
+        )
+        return
+
+    st.session_state["dataset_counts"] = {
+        "crexi": len(crexi_df) if crexi_df is not None else 0,
+        "realtor_sales": len(realtor_sales_df) if realtor_sales_df is not None else 0,
+        "realtor_rent": len(realtor_rent_df) if realtor_rent_df is not None else 0,
+    }
+    st.session_state["market_medians_df"] = market_medians_df
+
     filters = {
         "max_distance": float(max_distance),
         "max_units_diff": float(max_units_diff),

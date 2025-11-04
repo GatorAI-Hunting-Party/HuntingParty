@@ -1,5 +1,5 @@
 streamlit==1.50.0
-pandas
+pandas>=2.0.0
 numpy
 pgeocode
 Pillow
@@ -7,3 +7,4 @@ altair
 requests
 pdf2image
 python-dotenv
+supabase>=2.3.0

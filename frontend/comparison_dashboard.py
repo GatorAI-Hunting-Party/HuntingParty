@@ -41,9 +41,17 @@ DEFAULT_PDF_FOLDER = (REPO_ROOT / ".." / "OMs").resolve()
 EARTH_RADIUS_MILES = 3958.7613
 VACANCY_DEFAULT = 0.06
 
-GEOCODER = pgeocode.Nominatim("us")
-
 MISSING_STRINGS = {"", "na", "n/a", "none", "null", "-", "--"}
+
+_GEOCODER_WARNING_SHOWN = False
+
+
+@st.cache_resource(show_spinner=False)
+def get_geocoder() -> Optional[pgeocode.Nominatim]:
+    try:
+        return pgeocode.Nominatim("us")
+    except Exception:
+        return None
 
 BEDROOM_MAP = [
     ("1 Bed", "1_bed", 1),
@@ -234,14 +242,26 @@ def parse_lot_size_to_acres(value: Any) -> Optional[float]:
 
 @st.cache_data(show_spinner=False)
 def geocode_zip(zip_code: str) -> Optional[Tuple[float, float]]:
+    global _GEOCODER_WARNING_SHOWN
+    if not zip_code:
+        return None
+    geocoder = get_geocoder()
+    if geocoder is None:
+        if not _GEOCODER_WARNING_SHOWN:
+            st.warning("Postal code lookup unavailable; distance calculations will rely on city/state only.")
+            _GEOCODER_WARNING_SHOWN = True
+        return None
     try:
-        result = GEOCODER.query_postal_code(zip_code)
+        result = geocoder.query_postal_code(zip_code)
     except Exception:
+        if not _GEOCODER_WARNING_SHOWN:
+            st.warning("Postal code lookup failed; distance calculations will rely on city/state only.")
+            _GEOCODER_WARNING_SHOWN = True
         return None
     if result is None:
         return None
-    lat = result.latitude
-    lon = result.longitude
+    lat = result["latitude"] if "latitude" in result else getattr(result, "latitude", None)
+    lon = result["longitude"] if "longitude" in result else getattr(result, "longitude", None)
     if pd.isna(lat) or pd.isna(lon):
         return None
     return float(lat), float(lon)

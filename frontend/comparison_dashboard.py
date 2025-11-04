@@ -8,12 +8,19 @@ from functools import partial
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import sys
+
 import numpy as np
 import pandas as pd
 import pgeocode
 import streamlit as st
 from PIL import Image
 import altair as alt
+
+REPO_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = REPO_ROOT.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.lib.supabase_io import (
     fetch_crexi_comps,
@@ -26,8 +33,6 @@ from om_extractor import (
     images_to_base64,
     pdf_to_images,
 )
-
-REPO_ROOT = Path(__file__).resolve().parent
 DEFAULT_PDF_FOLDER = (REPO_ROOT / ".." / "OMs").resolve()
 
 EARTH_RADIUS_MILES = 3958.7613

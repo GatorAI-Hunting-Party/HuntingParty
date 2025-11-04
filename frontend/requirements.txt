@@ -3,4 +3,4 @@ pandas
 numpy
 pgeocode
 Pillow
-folium
+plotly

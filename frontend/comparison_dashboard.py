@@ -15,8 +15,6 @@ import plotly.graph_objects as go
 import plotly.express as px
 
 from PIL import Image
-from folium import Element
-from branca.colormap import linear
 
 import sys
 from pathlib import Path
@@ -941,35 +939,54 @@ def compute_opportunity_zone_share(df: pd.DataFrame) -> Optional[float]:
     return float(series.mean())
 
 @st.fragment
-def build_heatmap(data: pd.DataFrame, central_location: tuple[float, float], zoom: int = 6):
-    data_normalized = data[["latitude", "longitude", "asking_price"]].dropna(subset=["latitude", "longitude", "asking_price"])
+def build_heatmap(data: pd.DataFrame, target_stat: str, origin: tuple[float, float], default_location: tuple[float, float], 
+                  om_stat: float, zoom: int = 6):
+    data_normalized = data[["latitude", "longitude", target_stat]].dropna(subset=["latitude", "longitude", target_stat], inplace=False)
+
+    location = origin if origin else default_location
+    om_datapoint = { "latitude": location[0], "longitude": location[1], target_stat: om_stat }
+    
+    # Add the datapoint if not already in dataset and not NEW_YORK_COORDS
+    if (location is not None and not (om_datapoint["latitude"] == default_location[0] and om_datapoint["longitude"] == default_location[1])
+        and om_stat):
+        data_normalized = pd.concat([data_normalized, pd.DataFrame([om_datapoint])], ignore_index=True)
 
     data_normalized["latitude"] = pd.to_numeric(data_normalized["latitude"], errors="coerce")
     data_normalized["longitude"] = pd.to_numeric(data_normalized["longitude"], errors="coerce")
     data_normalized = data_normalized.dropna(subset=["latitude", "longitude"])
 
-    
     # Normalize asking_price safely using Q1 and Q3
-    q1_price = data_normalized["asking_price"].quantile(0.25)
-    q3_price = data_normalized["asking_price"].quantile(0.75)
+    q1_price = data_normalized[target_stat].quantile(0.25)
+    q3_price = data_normalized[target_stat].quantile(0.75)
     den = q3_price - q1_price if pd.notna(q3_price) and pd.notna(q1_price) else 0
     
     if den == 0:
-        data_normalized["asking_price_norm"] = 1.0
+        data_normalized["stat_norm"] = 1.0
     else:
-        data_normalized["asking_price_norm"] = ((data_normalized["asking_price"] - q1_price) / den)
+        data_normalized["stat_norm"] = ((data_normalized[target_stat] - q1_price) / den).clip(lower=0.15, upper=1)
+
+    # Default Format
+    template = '<span style="font-size:16px; font-weight:bold;">%{customdata:,.2f}</span><extra></extra>'
+    colorscale = "YlOrRd"
+
+    if target_stat == "asking_price":
+        template = '<span style="font-size:16px; font-weight:bold;">$%{customdata:,.2f}</span><extra></extra>'
+    elif target_stat == "price_per_sqft":
+        template = '<span style="font-size:16px; font-weight:bold;">$%{customdata:,.2f} / Sq. Ft.</span><extra></extra>'
+    elif target_stat == "cap_rate":
+        data_normalized[target_stat] *= 100
+        template = '<span style="font-size:16px; font-weight:bold;">%{customdata:,.2f}%</span><extra></extra>'
+        colorscale = "rdbu"
     
     fig = go.Figure(
         go.Densitymap(
             lat = data_normalized['latitude'],
             lon = data_normalized['longitude'],
-            z = data_normalized['asking_price_norm'],
-            zmin=0.1,
-            zmax=1,
+            z = data_normalized['stat_norm'],
             radius = 15,
-            customdata = data_normalized['asking_price'],
-            hovertemplate = '<span style="font-size:16px; font-weight:bold;">$%{customdata:,.2f}</span><extra></extra>',
-            colorscale = "YlOrRd",
+            customdata = data_normalized[target_stat],
+            hovertemplate = template,
+            colorscale = colorscale,
             showscale = False,
         )
     )
@@ -978,8 +995,8 @@ def build_heatmap(data: pd.DataFrame, central_location: tuple[float, float], zoo
         margin = dict(l=0, r=0, t=0, b=0),
         showlegend = False,
         map_style = "carto-darkmatter",
-        map_center_lat=central_location[0],
-        map_center_lon=central_location[1],
+        map_center_lat=origin[0],
+        map_center_lon=origin[1],
         map_zoom=5
     )
 
@@ -1308,25 +1325,27 @@ def main() -> None:
             st.dataframe(physical_display, width='stretch', hide_index=True)
 
     with comps_tab:
-        if not crexi_filtered.empty:
-            NEW_YORK_COORDS = (43.2994, -74.2179)
-            central_location = profile.get("location", NEW_YORK_COORDS)
-
-            heatmap_data = crexi_filtered.copy()
-            heatmap_data.loc[len(heatmap_data)] = {
-                "latitude": central_location[0],
-                "longitude": central_location[1],
-                "asking_price": profile.get("asking_price", 0)
-            }
-
-            heatmap = build_heatmap(data=heatmap_data, central_location=central_location, zoom=10)
-
-            st.plotly_chart(heatmap)
-
         st.subheader("CREXi Comp Stats")
         if crexi_filtered.empty:
             st.info("No CREXi comps matched the filters.")
         else:
+            ### MAP
+            NEW_YORK_COORDS = (43.2994, -74.2179)
+            options = ["Asking Price", "Price Per Sq. Ft.", "Cap Rate"]
+            selected = st.selectbox("Choose an option:", options, key="my_selection")
+
+            title_to_stat = {
+                "Asking Price": "asking_price",
+                "Price Per Sq. Ft.": "price_per_sqft",
+                "Cap Rate": "cap_rate",
+            }
+            target_stat = title_to_stat[selected]
+            om_stat = profile.get(target_stat, None)
+
+            heatmap = build_heatmap(data=crexi_filtered, target_stat=target_stat, origin=origin, default_location=NEW_YORK_COORDS, om_stat=om_stat, zoom=10)
+            st.plotly_chart(heatmap)
+
+            ## CREXi STATS
             st.dataframe(crexi_stats, width='stretch', hide_index=True)
             crexi_display = prepare_display_table(
                 crexi_filtered,

@@ -5,13 +5,18 @@ import math
 import re
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Sequence
 
 import numpy as np
 import pandas as pd
 import pgeocode
 import streamlit as st
+import plotly.graph_objects as go
+import plotly.express as px
+
 from PIL import Image
+from folium import Element
+from branca.colormap import linear
 
 import sys
 from pathlib import Path
@@ -744,7 +749,7 @@ def style_rent_table(df: pd.DataFrame) -> "pd.io.formats.style.Styler":
             return "background-color:#ffe0b2;"
         return "background-color:#ffcdd2;"
 
-    styler = styler.applymap(colorize, subset=["Rent Delta %"])
+    styler = styler.map(colorize, subset=["Rent Delta %"])
     return styler
 
 
@@ -936,6 +941,50 @@ def compute_opportunity_zone_share(df: pd.DataFrame) -> Optional[float]:
     return float(series.mean())
 
 
+def build_heatmap(data: pd.DataFrame, central_location: tuple[float, float], zoom: int = 6):
+    data_normalized = data[["latitude", "longitude", "asking_price"]].dropna(subset=["latitude", "longitude", "asking_price"])
+
+    data_normalized["latitude"] = pd.to_numeric(data_normalized["latitude"], errors="coerce")
+    data_normalized["longitude"] = pd.to_numeric(data_normalized["longitude"], errors="coerce")
+    data_normalized = data_normalized.dropna(subset=["latitude", "longitude"])
+
+    
+    # Normalize asking_price safely using Q1 and Q3
+    q1_price = data_normalized["asking_price"].quantile(0.25)
+    q3_price = data_normalized["asking_price"].quantile(0.75)
+    den = q3_price - q1_price if pd.notna(q3_price) and pd.notna(q1_price) else 0
+    
+    if den == 0:
+        data_normalized["asking_price_norm"] = 1.0
+    else:
+        data_normalized["asking_price_norm"] = ((data_normalized["asking_price"] - q1_price) / den).clip(lower=0.1, upper=1.0)
+        
+
+    # If you want a density/heat rather than points: (alt approach)
+    fig = go.Figure(go.Densitymapbox(
+        lat=data_normalized['latitude'],
+        lon=data_normalized['longitude'],
+        z=data_normalized['asking_price_norm'],
+        radius=15,
+        customdata=data_normalized['asking_price'],
+        hovertemplate='<span style="font-size:16px; font-weight:bold;">$%{customdata:,.2f}</span><extra></extra>',
+        colorscale="YlOrRd",
+        showscale=False
+    ))
+
+    fig.update_layout(
+        mapbox_style="carto-darkmatter",
+        mapbox_center={"lat": central_location[0], "lon": central_location[1]},
+        mapbox_zoom=zoom,
+        margin=dict(l=0, r=0, t=0, b=0),
+        showlegend=False,
+    )
+
+
+
+    return fig
+
+
 def prepare_display_table(
     df: pd.DataFrame,
     columns: List[Tuple[str, str, Optional[str]]],
@@ -959,6 +1008,7 @@ def prepare_display_table(
     if limit is not None:
         prepared = prepared.head(limit)
     return prepared
+
 
 def main() -> None:
     st.set_page_config(page_title="OM Comparison Dashboard", layout="wide")
@@ -1025,7 +1075,7 @@ def main() -> None:
         if not apply_filters:
             st.caption("Filters are off - full datasets are used for comparison.")
 
-        run_button = st.button("Extract & Compare", use_container_width=True)
+        run_button = st.button("Extract & Compare", width='stretch')
     max_cap_diff = max_cap_pp / 100.0
 
     if run_button:
@@ -1239,29 +1289,44 @@ def main() -> None:
                 {"Metric": "Vacancy Rate", "Value": format_percent(rent_totals.get("vacancy_rate"), 1)},
             ]
             egi_df = pd.DataFrame(egi_rows)
-            st.dataframe(egi_df, use_container_width=True, hide_index=True)
+            st.dataframe(egi_df, width='stretch', hide_index=True)
 
-            st.dataframe(style_rent_table(rent_table), use_container_width=True, hide_index=True)
+            st.dataframe(style_rent_table(rent_table), width='stretch', hide_index=True)
 
     with financial_tab:
         st.subheader("Financial Metrics")
         if financial_display.empty:
             st.info("No financial comparison available with current filters.")
         else:
-            st.dataframe(financial_display, use_container_width=True, hide_index=True)
+            st.dataframe(financial_display, width='stretch', hide_index=True)
 
         st.subheader("Physical Snapshot")
         if physical_display.empty:
             st.info("No physical comparison available with current filters.")
         else:
-            st.dataframe(physical_display, use_container_width=True, hide_index=True)
+            st.dataframe(physical_display, width='stretch', hide_index=True)
 
     with comps_tab:
+        if not crexi_filtered.empty:
+            NEW_YORK_COORDS = (43.2994, -74.2179)
+            central_location = profile.get("location", NEW_YORK_COORDS)
+
+            heatmap_data = crexi_filtered.copy()
+            heatmap_data.loc[len(heatmap_data)] = {
+                "latitude": central_location[0],
+                "longitude": central_location[1],
+                "asking_price": profile.get("asking_price", 0)
+            }
+
+            heatmap = build_heatmap(data=heatmap_data, central_location=central_location, zoom=10)
+
+            st.plotly_chart(heatmap)
+
         st.subheader("CREXi Comp Stats")
         if crexi_filtered.empty:
             st.info("No CREXi comps matched the filters.")
         else:
-            st.dataframe(crexi_stats, use_container_width=True, hide_index=True)
+            st.dataframe(crexi_stats, width='stretch', hide_index=True)
             crexi_display = prepare_display_table(
                 crexi_filtered,
                 [
@@ -1279,7 +1344,7 @@ def main() -> None:
                 limit=50,
             )
             st.markdown("**Sample of filtered CREXi comps (first 50)**")
-            st.dataframe(crexi_display, use_container_width=True, hide_index=True)
+            st.dataframe(crexi_display, width='stretch', hide_index=True)
             crexi_csv = crexi_filtered.to_csv(index=False)
             st.download_button(
                 "Download CREXi comps (CSV)",
@@ -1292,7 +1357,7 @@ def main() -> None:
         if realtor_sales_filtered.empty:
             st.info("No Realtor sale comps matched the filters.")
         else:
-            st.dataframe(realtor_sale_stats, use_container_width=True, hide_index=True)
+            st.dataframe(realtor_sale_stats, width='stretch', hide_index=True)
             realtor_sale_display = prepare_display_table(
                 realtor_sales_filtered,
                 [
@@ -1309,7 +1374,7 @@ def main() -> None:
                 limit=50,
             )
             st.markdown("**Sample of filtered Realtor sale comps (first 50)**")
-            st.dataframe(realtor_sale_display, use_container_width=True, hide_index=True)
+            st.dataframe(realtor_sale_display, width='stretch', hide_index=True)
             realtor_sale_csv = realtor_sales_filtered.to_csv(index=False)
             st.download_button(
                 "Download Realtor sale comps (CSV)",
@@ -1322,7 +1387,7 @@ def main() -> None:
         if realtor_rents_filtered.empty:
             st.info("No Realtor rent comps matched the filters.")
         else:
-            st.dataframe(rent_stats, use_container_width=True, hide_index=True)
+            st.dataframe(rent_stats, width='stretch', hide_index=True)
             rent_display = prepare_display_table(
                 realtor_rents_filtered,
                 [
@@ -1337,7 +1402,7 @@ def main() -> None:
                 limit=50,
             )
             st.markdown("**Sample of filtered Realtor rent comps (first 50)**")
-            st.dataframe(rent_display, use_container_width=True, hide_index=True)
+            st.dataframe(rent_display, width='stretch', hide_index=True)
             rent_csv = realtor_rents_filtered.to_csv(index=False)
             st.download_button(
                 "Download Realtor rent comps (CSV)",
@@ -1357,7 +1422,7 @@ def main() -> None:
             st.info("PDF preview unavailable.")
         else:
             page = st.slider("Page", min_value=1, max_value=len(images), value=1)
-            st.image(images[page - 1], use_column_width=True)
+            st.image(images[page - 1], width="stretch")
             st.caption(f"Showing page {page} of {len(images)}")
 
 

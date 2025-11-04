@@ -3,3 +3,4 @@ pandas
 numpy
 pgeocode
 Pillow
+folium

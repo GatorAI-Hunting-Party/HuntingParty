@@ -1,17 +1,20 @@
 ﻿from __future__ import annotations
 
+
 import json
 import math
 import re
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Sequence
+import pickle
 
 import numpy as np
 import pandas as pd
 import pgeocode
 import streamlit as st
-import plotly.graph_objects as go
+from streamlit.components.v1 import iframe, html
+from plotly import graph_objects as go
 import plotly.express as px
 
 from PIL import Image
@@ -24,6 +27,7 @@ current_file = Path(__file__).resolve()
 frontend_dir = current_file.parent
 project_root = frontend_dir.parent
 om_scraper_path = project_root / "OM_Scraper"
+cached_geodata_path = project_root / "cached_geodata"
 sys.path.insert(0, str(om_scraper_path))
 
 from om_extractor import (
@@ -938,70 +942,32 @@ def compute_opportunity_zone_share(df: pd.DataFrame) -> Optional[float]:
         return None
     return float(series.mean())
 
-@st.fragment
-def build_heatmap(data: pd.DataFrame, target_stat: str, origin: tuple[float, float], default_location: tuple[float, float], 
-                  om_stat: float, zoom: int = 6):
-    data_normalized = data[["latitude", "longitude", target_stat]].dropna(subset=["latitude", "longitude", target_stat], inplace=False)
+@st.cache_data(show_spinner=True)
+def build_heatmap(map_resolution: int, target_stat: str, origin: tuple[float, float], zoom_level: int = 6) -> go.Figure:
+    # load fig
+    heatmap_path = cached_geodata_path / f"new_york_{target_stat}_{map_resolution}.pkl"
 
-    location = origin if origin else default_location
-    om_datapoint = { "latitude": location[0], "longitude": location[1], target_stat: om_stat }
+    fig = None
     
-    # Add the datapoint if not already in dataset and not NEW_YORK_COORDS
-    if (location is not None and not (om_datapoint["latitude"] == default_location[0] and om_datapoint["longitude"] == default_location[1])
-        and om_stat):
-        data_normalized = pd.concat([data_normalized, pd.DataFrame([om_datapoint])], ignore_index=True)
+    with open(heatmap_path, "rb") as f:
+        fig = pickle.load(f)
 
-    data_normalized["latitude"] = pd.to_numeric(data_normalized["latitude"], errors="coerce")
-    data_normalized["longitude"] = pd.to_numeric(data_normalized["longitude"], errors="coerce")
-    data_normalized = data_normalized.dropna(subset=["latitude", "longitude"])
-
-    # Normalize asking_price safely using Q1 and Q3
-    q1_price = data_normalized[target_stat].quantile(0.25)
-    q3_price = data_normalized[target_stat].quantile(0.75)
-    den = q3_price - q1_price if pd.notna(q3_price) and pd.notna(q1_price) else 0
-    
-    if den == 0:
-        data_normalized["stat_norm"] = 1.0
-    else:
-        data_normalized["stat_norm"] = ((data_normalized[target_stat] - q1_price) / den).clip(lower=0.15, upper=1)
-
-    # Default Format
-    template = '<span style="font-size:16px; font-weight:bold;">%{customdata:,.2f}</span><extra></extra>'
-    colorscale = "YlOrRd"
-
-    if target_stat == "asking_price":
-        template = '<span style="font-size:16px; font-weight:bold;">$%{customdata:,.2f}</span><extra></extra>'
-    elif target_stat == "price_per_sqft":
-        template = '<span style="font-size:16px; font-weight:bold;">$%{customdata:,.2f} / Sq. Ft.</span><extra></extra>'
-    elif target_stat == "cap_rate":
-        data_normalized[target_stat] *= 100
-        template = '<span style="font-size:16px; font-weight:bold;">%{customdata:,.2f}%</span><extra></extra>'
-        colorscale = "rdbu"
-    
-    fig = go.Figure(
-        go.Densitymap(
-            lat = data_normalized['latitude'],
-            lon = data_normalized['longitude'],
-            z = data_normalized['stat_norm'],
-            radius = 15,
-            customdata = data_normalized[target_stat],
-            hovertemplate = template,
-            colorscale = colorscale,
-            showscale = False,
-        )
+    fig.update_geos(
+        center = {"lon": origin[0], "lat": origin[1]},  # your center
+        projection_scale = zoom_level
     )
 
     fig.update_layout(
         margin = dict(l=0, r=0, t=0, b=0),
         showlegend = False,
-        map_style = "carto-darkmatter",
         map_center_lat=origin[0],
         map_center_lon=origin[1],
         map_zoom=5
     )
 
-    return fig
+    fig.update_traces(showscale=False)
 
+    return fig
 
 def prepare_display_table(
     df: pd.DataFrame,
@@ -1330,7 +1296,10 @@ def main() -> None:
             st.info("No CREXi comps matched the filters.")
         else:
             ### MAP
+
             NEW_YORK_COORDS = (43.2994, -74.2179)
+            center = origin if origin else NEW_YORK_COORDS
+
             options = ["Asking Price", "Price Per Sq. Ft.", "Cap Rate"]
             selected = st.selectbox("Choose an option:", options, key="my_selection")
 
@@ -1340,10 +1309,15 @@ def main() -> None:
                 "Cap Rate": "cap_rate",
             }
             target_stat = title_to_stat[selected]
-            om_stat = profile.get(target_stat, None)
+            ### OVERRIVE target_stat FOR NOW UNTIL LATER MAPS ARE CREATED
+            target_stat = "asking_price"
 
-            heatmap = build_heatmap(data=crexi_filtered, target_stat=target_stat, origin=origin, default_location=NEW_YORK_COORDS, om_stat=om_stat, zoom=10)
-            st.plotly_chart(heatmap)
+            map_resolution = 200
+            
+            # Placeholder for faster loding of other elements
+            ## heatmap loaded at bottom of this block
+            heatmap_placeholder = st.empty()
+                
 
             ## CREXi STATS
             st.dataframe(crexi_stats, width='stretch', hide_index=True)
@@ -1430,6 +1404,13 @@ def main() -> None:
                 file_name="realtor_rents_filtered.csv",
                 mime="text/csv",
             )
+        
+        
+        heatmap_placeholder.empty()
+        with heatmap_placeholder.container():
+            with st.spinner("Building heatmap..."):
+                heatmap = build_heatmap(map_resolution=map_resolution, target_stat=target_stat, origin=center)
+                st.plotly_chart(heatmap, use_container_width=True)
 
     with raw_tab:
         st.subheader("Raw Extracted JSON")

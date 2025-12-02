@@ -26,7 +26,7 @@ if SCRAPER_ROOT.exists() and str(SCRAPER_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRAPER_ROOT))
 
 from app.lib.supabase_io import (
-    fetch_crexi_comps,
+    fetch_crexi,
     fetch_market_medians,
     fetch_realtor_props,
     fetch_realtor_rent,
@@ -326,6 +326,10 @@ def build_property_profile(om_data: Dict[str, Any]) -> Dict[str, Any]:
 
     address = location.get("address")
     address_parts = parse_address_components(address)
+    if address_parts.get("city"):
+        st.session_state["om_city"] = address_parts["city"]
+    if address_parts.get("state"):
+        st.session_state["om_state"] = address_parts["state"]
     lot_size_raw = location.get("lot_size")
     lot_size_acres = parse_lot_size_to_acres(lot_size_raw)
 
@@ -432,7 +436,7 @@ def load_crexi_dataset(
 ) -> pd.DataFrame:
     city_filter = city.title().strip() if isinstance(city, str) and city.strip() else None
     state_filter = state.upper().strip() if isinstance(state, str) and state.strip() else None
-    df = fetch_crexi_comps(city=city_filter, state=state_filter, limit=limit)
+    df = fetch_crexi(city=city_filter, state=state_filter, limit=limit)
     if df.empty:
         return df
 

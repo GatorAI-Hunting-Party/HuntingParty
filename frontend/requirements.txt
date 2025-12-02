@@ -1,6 +1,6 @@
 streamlit==1.50.0
 pandas>=2.0.0
-numpy
+numpy>=1.24.0
 pgeocode
 Pillow
 altair
@@ -9,3 +9,6 @@ pdf2image
 python-dotenv
 supabase>=2.3.0
 pymupdf>=1.24.0
+pydeck>=0.8.0
+mgwr>=2.2.1
+pysal>=24.1

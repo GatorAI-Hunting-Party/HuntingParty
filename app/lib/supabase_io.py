@@ -15,18 +15,12 @@ except Exception:
 
     def cache_resource(func=None, **_):
         if func is None:
-            def decorator(inner):
-                return inner
-
-            return decorator
+            return lambda inner: inner
         return func
 
     def cache_data(func=None, **_):
         if func is None:
-            def decorator(inner):
-                return inner
-
-            return decorator
+            return lambda inner: inner
         return func
 
 
@@ -47,17 +41,16 @@ def _df(rows: List[Dict[str, Any]]) -> pd.DataFrame:
 
 
 @cache_data(show_spinner=False, ttl=300)
-def fetch_crexi_comps(
-    city: Optional[str] = None, state: Optional[str] = None, limit: int = 1000
+def fetch_crexi(
+    city: Optional[str] = None, state: Optional[str] = None, limit: int = 5000
 ) -> pd.DataFrame:
     sb = get_supabase_client()
     q = sb.table("crexi_merged_ny_clean").select("*")
     if city:
-        q = q.eq("City", city)
+        q = q.eq("City", city.strip().title())
     if state:
-        q = q.eq("State", state)
-    q = q.limit(limit)
-    return _df(q.execute().data)
+        q = q.eq("State", state.strip().upper())
+    return _df(q.limit(limit).execute().data)
 
 
 @cache_data(show_spinner=False, ttl=300)
@@ -67,11 +60,10 @@ def fetch_realtor_props(
     sb = get_supabase_client()
     q = sb.table("realtor_properties_ny_clean").select("*")
     if city:
-        q = q.eq("city", city)
+        q = q.eq("city", city.strip().title())
     if state:
-        q = q.eq("state", state)
-    q = q.limit(limit)
-    return _df(q.execute().data)
+        q = q.eq("state", state.strip().upper())
+    return _df(q.limit(limit).execute().data)
 
 
 @cache_data(show_spinner=False, ttl=300)
@@ -81,11 +73,10 @@ def fetch_realtor_rent(
     sb = get_supabase_client()
     q = sb.table("realtor_rent_clean").select("*")
     if city:
-        q = q.eq("city", city)
+        q = q.eq("city", city.strip().title())
     if state:
-        q = q.eq("state", state)
-    q = q.limit(limit)
-    return _df(q.execute().data)
+        q = q.eq("state", state.strip().upper())
+    return _df(q.limit(limit).execute().data)
 
 
 @cache_data(show_spinner=False, ttl=300)

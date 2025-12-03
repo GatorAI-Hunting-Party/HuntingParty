@@ -2194,31 +2194,34 @@ def render_gwr_map_inline(city, state):
     pmin, pmax = surf["pred"].min(), surf["pred"].max()
     scale = (pmax - pmin) if pmax != pmin else 1e-6
     surf["norm"] = (surf["pred"] - pmin) / scale
-    palette = [
-        [0, 0, 255],
-        [0, 255, 255],
-        [0, 255, 0],
-        [255, 255, 0],
-        [255, 165, 0],
-        [255, 0, 0],
+    color_range = [
+        [49, 54, 149],
+        [69, 117, 180],
+        [116, 173, 209],
+        [171, 217, 233],
+        [224, 243, 248],
+        [254, 224, 144],
+        [253, 174, 97],
+        [244, 109, 67],
+        [215, 48, 39],
+        [165, 0, 38],
     ]
-    surf["color_idx"] = (surf["norm"] * 5).clip(0, 5).round().astype(int)
-    surf["color"] = surf["color_idx"].map({i: palette[i] for i in range(6)})
-    layer = pdk.Layer(
-        "ScatterplotLayer",
-        data=surf.dropna(subset=["lat", "lon"]),
+    heat_layer = pdk.Layer(
+        "HeatmapLayer",
+        data=surf.dropna(subset=["lat", "lon", "pred"]),
         get_position="[lon, lat]",
-        get_radius=120,
-        get_fill_color="color",
-        pickable=True,
+        get_weight="pred",
+        aggregation="MEAN",
+        radius_pixels=50,
+        color_range=color_range,
     )
     tooltip = {
         "html": "<b>Predicted $/sf:</b> {pred}<br/><b>Samples used:</b> {n_used}",
         "style": {"backgroundColor": "steelblue", "color": "white"},
     }
     view_state = pdk.ViewState(latitude=mid_lat, longitude=mid_lon, zoom=10)
-    st.pydeck_chart(pdk.Deck(layers=[layer], initial_view_state=view_state, tooltip=tooltip))
-    st.caption("Colors represent predicted price/sf. Beta implementation; values are indicative only.")
+    st.pydeck_chart(pdk.Deck(layers=[heat_layer], initial_view_state=view_state, tooltip=tooltip))
+    st.caption(f"Predicted $/sf range: {pmin:,.0f} – {pmax:,.0f}. Heatmap weighted by predicted price/sf; darker reds = higher.")
 
 
 if __name__ == "__main__":

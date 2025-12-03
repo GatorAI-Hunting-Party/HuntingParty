@@ -1695,7 +1695,7 @@ def main() -> None:
     with spatial_tab:
         st.subheader("Spatial Pricing Model")
         if crexi_distance_only.empty:
-            st.info("CREXi comps are required to run the spatial model.")
+            st.info("No nearby CREXi comps for the regression; GWR map below will still render using fallbacks.")
         else:
             remember_spatial_tab = partial(remember_tab, "Spatial Pricing")
             controls = st.columns(2)

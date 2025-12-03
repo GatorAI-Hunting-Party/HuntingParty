@@ -1,0 +1,16 @@
+streamlit>=1.50.0
+supabase>=2.3.0
+pandas>=2.0.0
+numpy>=1.24.0
+pydeck>=0.8.0
+pgeocode
+Pillow
+altair
+requests
+pdf2image
+python-dotenv
+pymupdf>=1.24.0
+
+# optional spatial libs; fallback used if unavailable
+mgwr>=2.2.1
+pysal>=24.1

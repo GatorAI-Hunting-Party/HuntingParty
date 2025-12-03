@@ -126,7 +126,7 @@ def supabase_ping() -> Tuple[bool, str]:
 def fetch_crexi_with_fallback(city: Optional[str], state: Optional[str], limit: int = 5000) -> Tuple[pd.DataFrame, str]:
     sb = get_supabase_client()
     c, s = _norm_city_state(city, state)
-    q1 = sb.table("crexi_merged_ny_clean").select("")
+    q1 = sb.table("crexi_merged_ny_clean").select("*")
     if c:
         q1 = q1.eq("City", c)
     if s:
@@ -136,11 +136,11 @@ def fetch_crexi_with_fallback(city: Optional[str], state: Optional[str], limit: 
         return d1, f"{c}, {s}" if c and s else (c or s or "global")
 
     if s:
-        d2 = _df(sb.table("crexi_merged_ny_clean").select("").eq("State", s).limit(limit).execute().data)
+        d2 = _df(sb.table("crexi_merged_ny_clean").select("*").eq("State", s).limit(limit).execute().data)
         if not d2.empty:
             return d2, f"{s} (state)"
 
-    d3 = _df(sb.table("crexi_merged_ny_clean").select("").limit(limit).execute().data)
+    d3 = _df(sb.table("crexi_merged_ny_clean").select("*").limit(limit).execute().data)
     return d3, "global"
 
 
@@ -148,7 +148,7 @@ def fetch_crexi_with_fallback(city: Optional[str], state: Optional[str], limit: 
 def fetch_realtor_props_with_fallback(city: Optional[str], state: Optional[str], limit: int = 5000) -> Tuple[pd.DataFrame, str]:
     sb = get_supabase_client()
     c, s = _norm_city_state(city, state)
-    q1 = sb.table("realtor_properties_ny_clean").select("")
+    q1 = sb.table("realtor_properties_ny_clean").select("*")
     if c:
         q1 = q1.eq("city", c)
     if s:
@@ -158,9 +158,9 @@ def fetch_realtor_props_with_fallback(city: Optional[str], state: Optional[str],
         return d1, f"{c}, {s}" if c and s else (c or s or "global")
 
     if s:
-        d2 = _df(sb.table("realtor_properties_ny_clean").select("").eq("state", s).limit(limit).execute().data)
+        d2 = _df(sb.table("realtor_properties_ny_clean").select("*").eq("state", s).limit(limit).execute().data)
         if not d2.empty:
             return d2, f"{s} (state)"
 
-    d3 = _df(sb.table("realtor_properties_ny_clean").select("").limit(limit).execute().data)
+    d3 = _df(sb.table("realtor_properties_ny_clean").select("*").limit(limit).execute().data)
     return d3, "global"

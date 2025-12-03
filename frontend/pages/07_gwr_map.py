@@ -2,12 +2,16 @@ import streamlit as st
 import pandas as pd
 import pydeck as pdk
 
-from app.lib.supabase_io import fetch_crexi_with_fallback, fetch_realtor_props_with_fallback
+from app.lib.supabase_io import supabase_ping, fetch_crexi_with_fallback, fetch_realtor_props_with_fallback
 from app.gwr.pipeline import gwr_surface, run_teammate_gwr
 
 
 st.title("GWR Map (Beta)")
+ok_ping, ping_msg = supabase_ping()
 st.caption("Supabase-backed. Falls back to kernel-weighted local regression if full GWR pipeline is unavailable.")
+st.info(f"Supabase ping: {'OK' if ok_ping else 'ERROR'} | {ping_msg}")
+if not ok_ping:
+    st.error("Supabase is not reachable; map rendering may fail.")
 
 city = st.text_input("City", value=st.session_state.get("om_city", "Brooklyn"))
 state = st.text_input("State", value=st.session_state.get("om_state", "NY"))

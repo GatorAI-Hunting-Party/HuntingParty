@@ -28,6 +28,7 @@ if SCRAPER_ROOT.exists() and str(SCRAPER_ROOT) not in sys.path:
 
 from app.lib.supabase_io import (
     fetch_crexi,
+    supabase_ping,
     fetch_crexi_with_fallback,
     fetch_market_medians,
     fetch_realtor_props,
@@ -1387,6 +1388,9 @@ def main() -> None:
 
     with st.sidebar:
         st.header("Data Sources")
+        ok_ping, ping_msg = supabase_ping()
+        st.write(f"Supabase ping: {'OK' if ok_ping else 'ERROR'}")
+        st.write(ping_msg)
         st.caption(
             "Supabase tables: crexi_merged_ny_clean, realtor_properties_ny_clean, "
             "realtor_rent_clean, market_medians_all."
@@ -2118,6 +2122,11 @@ def render_gwr_map_inline(city, state):
     import streamlit as st  # noqa: F811
     import pandas as pd  # noqa: F811
     import pydeck as pdk
+
+    ok, msg = supabase_ping()
+    if not ok:
+        st.error(f"Supabase not reachable: {msg}")
+        return
 
     st.subheader("GWR Map (Beta)")
     provider = st.selectbox("Provider", ["CREXi (price/sf)", "Realtor (price/sf)"], key="gwr_provider_inline")

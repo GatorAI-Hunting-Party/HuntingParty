@@ -13,6 +13,7 @@ import sys
 import numpy as np
 import pandas as pd
 import pgeocode
+import pydeck as pdk
 import streamlit as st
 from PIL import Image
 import altair as alt
@@ -27,10 +28,13 @@ if SCRAPER_ROOT.exists() and str(SCRAPER_ROOT) not in sys.path:
 
 from app.lib.supabase_io import (
     fetch_crexi,
+    fetch_crexi_with_fallback,
     fetch_market_medians,
     fetch_realtor_props,
+    fetch_realtor_props_with_fallback,
     fetch_realtor_rent,
 )
+from app.gwr.pipeline import gwr_surface, run_teammate_gwr
 from om_extractor import (
     call_azure_extraction,
     images_to_base64,
@@ -1993,8 +1997,7 @@ def main() -> None:
                             st.dataframe(coeff_df, use_container_width=True, hide_index=True)
 
         st.divider()
-        st.subheader("GWR Map (Beta)")
-        render_gwr_map(st.session_state.get("om_city", "Brooklyn"), st.session_state.get("om_state", "NY"))
+        render_gwr_map_inline(st.session_state.get("om_city", "Brooklyn"), st.session_state.get("om_state", "NY"))
 
     with comps_tab:
         st.subheader("CREXi Comp Stats")
@@ -2111,24 +2114,22 @@ def main() -> None:
             st.image(images[page - 1], use_column_width=True)
             st.caption(f"Showing page {page} of {total_pages}")
  
-def render_gwr_map(city, state):
+def render_gwr_map_inline(city, state):
     import streamlit as st  # noqa: F811
     import pandas as pd  # noqa: F811
     import pydeck as pdk
 
-    from app.lib.supabase_io import fetch_crexi, fetch_realtor_props
-    from app.gwr.pipeline import gwr_surface, run_teammate_gwr
-
+    st.subheader("GWR Map (Beta)")
     provider = st.selectbox("Provider", ["CREXi (price/sf)", "Realtor (price/sf)"], key="gwr_provider_inline")
     bandwidth = st.slider("Bandwidth (miles)", 2.0, 25.0, 8.0, 0.5, key="gwr_bw_inline")
     grid_step = st.slider("Grid step (miles)", 0.5, 10.0, 2.0, 0.5, key="gwr_step_inline")
 
     try:
         if provider.startswith("CREXi"):
-            df = fetch_crexi(city=city, state=state, limit=5000)
+            df, used_geo = fetch_crexi_with_fallback(city=city, state=state, limit=5000)
             lat_col, lon_col, metric_col = "Latitude", "Longitude", "Price/SqFt"
         else:
-            df = fetch_realtor_props(city=city, state=state, limit=5000)
+            df, used_geo = fetch_realtor_props_with_fallback(city=city, state=state, limit=5000)
             lat_col, lon_col = "latitude", "longitude"
             df["_ppsf"] = pd.to_numeric(df.get("price_per_sqft"), errors="coerce")
             if df["_ppsf"].isna().all():
@@ -2141,6 +2142,7 @@ def render_gwr_map(city, state):
         df[lat_col] = pd.to_numeric(df[lat_col], errors="coerce")
         df[lon_col] = pd.to_numeric(df[lon_col], errors="coerce")
         df = df.dropna(subset=[metric_col, lat_col, lon_col])
+        st.info(f"Using geography: {used_geo} | Samples: {len(df)}")
     except Exception as exc:
         st.error(f"Failed to load data for GWR map: {exc}")
         return

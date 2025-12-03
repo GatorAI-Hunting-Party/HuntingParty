@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import pydeck as pdk
 
-from app.lib.supabase_io import fetch_crexi, fetch_realtor_props
+from app.lib.supabase_io import fetch_crexi_with_fallback, fetch_realtor_props_with_fallback
 from app.gwr.pipeline import gwr_surface, run_teammate_gwr
 
 
@@ -17,10 +17,10 @@ grid_step = st.slider("Grid step (miles)", 0.5, 10.0, 2.0, 0.5)
 
 try:
     if provider.startswith("CREXi"):
-        df = fetch_crexi(city=city, state=state, limit=5000)
+        df, used_geo = fetch_crexi_with_fallback(city=city, state=state, limit=5000)
         lat_col, lon_col, metric_col = "Latitude", "Longitude", "Price/SqFt"
     else:
-        df = fetch_realtor_props(city=city, state=state, limit=5000)
+        df, used_geo = fetch_realtor_props_with_fallback(city=city, state=state, limit=5000)
         lat_col, lon_col = "latitude", "longitude"
         df["_ppsf"] = pd.to_numeric(df.get("price_per_sqft"), errors="coerce")
         if df["_ppsf"].isna().all():
@@ -34,6 +34,7 @@ try:
     df[lon_col] = pd.to_numeric(df[lon_col], errors="coerce")
     df = df.dropna(subset=[metric_col, lat_col, lon_col])
 
+    st.info(f"Using geography: {used_geo} | Samples: {len(df)}")
     st.write(f"Samples: {len(df)}")
 
     surf = run_teammate_gwr(df, metric_col=metric_col, lat_col=lat_col, lon_col=lon_col)
